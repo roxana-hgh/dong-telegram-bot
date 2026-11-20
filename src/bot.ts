@@ -1,38 +1,57 @@
+// src/bot.ts
 import { Bot } from "grammy";
-import { fa as t } from "@/texts/fa";
-import { mainMenu, backMenu } from "@/keyboards";
-import { upsertUser, setStep } from "@/db/users";
-import { registerGroupHandlers } from "@/handlers/groups";
+import type { MyContext } from "@/types";
+import { upsertUser } from "@/db/users";
+import { setState } from "@/services/state";
 
-export const bot = new Bot(process.env.BOT_TOKEN!);
+import { registerGroupHandlers } from "@/handlers/groups"; // groups + members
+import { registerTripHandlers } from "@/handlers/trip";
+import { registerExpenseHandlers } from "@/handlers/expense";
+import { registerReportHandlers } from "@/handlers/report";
+import { registerStepRouter } from "@/handlers/steps";
 
-const html = { parse_mode: "HTML" as const };
+const token = process.env.BOT_TOKEN;
+if (!token) throw new Error("BOT_TOKEN is not set");
 
-bot.command("start", async (ctx) => {
-  const user = await upsertUser(ctx.from!.id, ctx.from!.first_name);
-  await setStep(user.id, null);
-  await ctx.reply(t.welcome, { ...html, reply_markup: mainMenu });
+export const bot = new Bot<MyContext>(token);
+
+// 1) Load or create the user once per update and attach it to ctx
+bot.use(async (ctx, next) => {
+  if (!ctx.from) return; // skip updates without a sender
+  ctx.user = await upsertUser(ctx.from.id, ctx.from.first_name);
+  await next();
 });
 
-// برگشت به خانه همیشه state گفتگو رو پاک می‌کنه
-bot.callbackQuery("menu:home", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  const user = await upsertUser(ctx.from.id, ctx.from.first_name);
-  await setStep(user.id, null);
-  await ctx.editMessageText(t.welcome, { ...html, reply_markup: mainMenu });
+// 2) /start and /cancel always clear half-finished conversation state
+bot.command("start", async (ctx, next) => {
+  if (ctx.user.step) await setState(ctx.user.id, null);
+  await next(); // continue to the existing /start handler below
 });
 
-bot.callbackQuery("menu:how", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText(t.how, { ...html, reply_markup: backMenu });
+bot.command("cancel", async (ctx) => {
+  await setState(ctx.user.id, null);
+  await ctx.reply("لغو شد. برای برگشت به منوی اصلی /start رو بزن.");
 });
 
-bot.callbackQuery("menu:about", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText(t.about, { ...html, reply_markup: backMenu });
-});
+// 3) EXISTING handlers: put your current /start and "menu:home" handlers here
+//    (they were in your old bot.ts or another file; type them with Bot<MyContext>)
 
+// 4) Feature handlers
 registerGroupHandlers(bot);
+registerTripHandlers(bot);
+registerExpenseHandlers(bot);
+registerReportHandlers(bot);
 
-// پیام‌های غیرمتنی (عکس، استیکر، ...)
-bot.on("message", (ctx) => ctx.reply(t.fallback));
+// 5) Fallback for stale buttons that no handler matched
+//    (must come after all callbackQuery handlers)
+bot.on("callback_query:data", async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "این دکمه منقضی شده، /start رو بزن." });
+});
+
+// 6) Text step router; must be registered last
+registerStepRouter(bot);
+
+// 7) A handler error must not crash the process
+bot.catch((err) => {
+  console.error(`Error while handling update ${err.ctx.update.update_id}:`, err.error);
+});

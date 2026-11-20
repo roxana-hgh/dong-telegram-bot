@@ -4,8 +4,8 @@
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
   moduleFormat = "cjs"
 }
 
@@ -17,7 +17,8 @@ model User {
   id         Int      @id @default(autoincrement())
   telegramId BigInt   @unique
   name       String
-  step       String?  // وضعیت گفتگو، مثلاً "new_group_name"
+  step       String?
+  draft      Json? // داده‌ی موقت گفتگو، مثلاً { amount, description, paidBy }
   createdAt  DateTime @default(now())
   groups     Group[]
   members    Member[]
@@ -67,8 +68,8 @@ model Expense {
   tripId         Int
   trip           Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
   paidByMemberId Int
-  paidBy         Member         @relation(fields: [paidByMemberId], references: [id])
-  amount         Int            //toman
+  paidBy         Member         @relation(fields: [paidByMemberId], references: [id], onDelete: NoAction)
+  amount         Int //toman
   description    String
   createdAt      DateTime       @default(now())
   shares         ExpenseShare[]
@@ -79,7 +80,7 @@ model ExpenseShare {
   expenseId Int
   expense   Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
   memberId  Int
-  member    Member  @relation(fields: [memberId], references: [id])
+  member    Member  @relation(fields: [memberId], references: [id], onDelete: NoAction)
   amount    Int
 
   @@unique([expenseId, memberId])

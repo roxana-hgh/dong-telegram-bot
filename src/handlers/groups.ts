@@ -1,43 +1,40 @@
-import { Bot, Context, InlineKeyboard } from "grammy";
+// src/handlers/group.ts
+import { Bot, InlineKeyboard } from "grammy";
+import type { MyContext } from "@/types";
 import { prisma } from "@/db/client";
-import { upsertUser, setStep } from "@/db/users";
+import { setStep } from "@/db/users";
 import { fa as t } from "@/texts/fa";
 import { groupMenu, cancelKb, doneKb } from "@/keyboards";
 
 const html = { parse_mode: "HTML" as const };
 
-const me = (ctx: Context) => upsertUser(ctx.from!.id, ctx.from!.first_name);
-
-// فقط مالک گروه می‌تونه ببینه. هر callback رو سمت سرور چک می‌کنیم.
+// Only the group owner can see it. Every callback is checked server-side.
 const loadGroup = (groupId: number, userId: number) =>
   prisma.group.findFirst({
     where: { id: groupId, ownerId: userId },
     include: { members: { orderBy: { id: "asc" } } },
   });
 
-async function showGroup(ctx: Context, groupId: number) {
-  const user = await me(ctx);
-  const group = await loadGroup(groupId, user.id);
+async function showGroup(ctx: MyContext, groupId: number) {
+  const group = await loadGroup(groupId, ctx.user.id);
   if (!group) return;
   await ctx.editMessageText(
     t.groupPage(group.name, group.members.map((m) => m.displayName)),
-    { ...html, reply_markup: groupMenu }
+    { ...html, reply_markup: groupMenu(group.id) }
   );
 }
 
-export function registerGroupHandlers(bot: Bot) {
+export function registerGroupHandlers(bot: Bot<MyContext>) {
   bot.callbackQuery("menu:new_group", async (ctx) => {
     await ctx.answerCallbackQuery();
-    const user = await me(ctx);
-    await setStep(user.id, "new_group_name");
+    await setStep(ctx.user.id, "new_group_name");
     await ctx.editMessageText(t.askGroupName, { ...html, reply_markup: cancelKb });
   });
 
   bot.callbackQuery("menu:my_groups", async (ctx) => {
     await ctx.answerCallbackQuery();
-    const user = await me(ctx);
     const groups = await prisma.group.findMany({
-      where: { ownerId: user.id },
+      where: { ownerId: ctx.user.id },
       orderBy: { id: "desc" },
     });
     const kb = new InlineKeyboard();
@@ -56,8 +53,7 @@ export function registerGroupHandlers(bot: Bot) {
 
   bot.callbackQuery(/^g:done:(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    const user = await me(ctx);
-    await setStep(user.id, null);
+    await setStep(ctx.user.id, null);
     await showGroup(ctx, Number(ctx.match[1]));
   });
 
@@ -65,10 +61,12 @@ export function registerGroupHandlers(bot: Bot) {
     ctx.answerCallbackQuery({ text: t.soon, show_alert: true })
   );
 
-  // پیام‌های متنی: بر اساس step کاربر
-  bot.on("message:text", async (ctx) => {
-    const user = await me(ctx);
+  // Text messages: handles only the group-related steps,
+  // everything else is passed on via next()
+  bot.on("message:text", async (ctx, next) => {
+    const user = ctx.user;
     const text = ctx.message.text.trim();
+    if (text.startsWith("/")) return next();
 
     if (user.step === "new_group_name") {
       if (text.length > 50) return ctx.reply(t.nameTooLong);
@@ -76,7 +74,7 @@ export function registerGroupHandlers(bot: Bot) {
         data: {
           name: text,
           ownerId: user.id,
-          // سازنده خودش اولین عضوئه
+          // The creator is the first member
           members: { create: { displayName: user.name, userId: user.id } },
         },
       });
@@ -112,6 +110,6 @@ export function registerGroupHandlers(bot: Bot) {
       });
     }
 
-    return ctx.reply(t.fallback);
+    return next(); // not a group step: let the step router handle it
   });
 }
