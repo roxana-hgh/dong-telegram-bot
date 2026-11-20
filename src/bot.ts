@@ -1,32 +1,38 @@
 import { Bot } from "grammy";
 import { fa as t } from "@/texts/fa";
 import { mainMenu, backMenu } from "@/keyboards";
+import { upsertUser, setStep } from "@/db/users";
+import { registerGroupHandlers } from "@/handlers/groups";
 
 export const bot = new Bot(process.env.BOT_TOKEN!);
 
 const html = { parse_mode: "HTML" as const };
 
-bot.command("start", (ctx) =>
-  ctx.reply(t.welcome, { ...html, reply_markup: mainMenu })
-);
+bot.command("start", async (ctx) => {
+  const user = await upsertUser(ctx.from!.id, ctx.from!.first_name);
+  await setStep(user.id, null);
+  await ctx.reply(t.welcome, { ...html, reply_markup: mainMenu });
+});
 
-// صفحه‌هایی که متنشون رو عوض می‌کنیم
-const pages = {
-  "menu:home": { text: t.welcome, kb: mainMenu },
-  "menu:how": { text: t.how, kb: backMenu },
-  "menu:about": { text: t.about, kb: backMenu },
-} as const;
+// برگشت به خانه همیشه state گفتگو رو پاک می‌کنه
+bot.callbackQuery("menu:home", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const user = await upsertUser(ctx.from.id, ctx.from.first_name);
+  await setStep(user.id, null);
+  await ctx.editMessageText(t.welcome, { ...html, reply_markup: mainMenu });
+});
 
-for (const [data, page] of Object.entries(pages)) {
-  bot.callbackQuery(data, async (ctx) => {
-    await ctx.answerCallbackQuery(); // برای برداشتن لودینگ روی دکمه
-    await ctx.editMessageText(page.text, { ...html, reply_markup: page.kb });
-  });
-}
+bot.callbackQuery("menu:how", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(t.how, { ...html, reply_markup: backMenu });
+});
 
-// دکمه‌هایی که هنوز ساخته نشدن
-bot.callbackQuery(["menu:new_group", "menu:my_groups"], (ctx) =>
-  ctx.answerCallbackQuery({ text: t.soon, show_alert: true })
-);
+bot.callbackQuery("menu:about", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(t.about, { ...html, reply_markup: backMenu });
+});
 
+registerGroupHandlers(bot);
+
+// پیام‌های غیرمتنی (عکس، استیکر، ...)
 bot.on("message", (ctx) => ctx.reply(t.fallback));
