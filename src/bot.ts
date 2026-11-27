@@ -3,10 +3,14 @@ import { Bot } from "grammy";
 import type { MyContext } from "@/types";
 import { upsertUser } from "@/db/users";
 import { setState } from "@/services/state";
+import { fa as t } from "@/texts/fa";
 
-import { registerGroupHandlers } from "@/handlers/groups"; // groups + members
+import { registerStartHandlers } from "@/handlers/start";
+import { registerGroupHandlers } from "@/handlers/groups";
+import { registerMemberHandlers } from "@/handlers/members";
 import { registerTripHandlers } from "@/handlers/trip";
 import { registerExpenseHandlers } from "@/handlers/expense";
+import { registerExpenseListHandlers } from "@/handlers/expenseList";
 import { registerReportHandlers } from "@/handlers/report";
 import { registerStepRouter } from "@/handlers/steps";
 
@@ -15,6 +19,9 @@ if (!token) throw new Error("BOT_TOKEN is not set");
 
 export const bot = new Bot<MyContext>(token);
 
+// Buttons that belong to a running flow and need the saved step/draft
+const FLOW_PREFIXES = ["ex:"];
+
 // 1) Load or create the user once per update and attach it to ctx
 bot.use(async (ctx, next) => {
   if (!ctx.from) return; // skip updates without a sender
@@ -22,36 +29,38 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
-// 2) /start and /cancel always clear half-finished conversation state
-bot.command("start", async (ctx, next) => {
-  if (ctx.user.step) await setState(ctx.user.id, null);
-  await next(); // continue to the existing /start handler below
+// 2) Any navigation button cancels a half-finished text flow.
+//    Without this, text sent after pressing "Back" would still be
+//    treated as the answer to the old question.
+bot.use(async (ctx, next) => {
+  const data = ctx.callbackQuery?.data;
+  if (data && ctx.user.step && !FLOW_PREFIXES.some((p) => data.startsWith(p))) {
+    await setState(ctx.user.id, null);
+    ctx.user.step = null;
+    ctx.user.draft = null;
+  }
+  await next();
 });
 
-bot.command("cancel", async (ctx) => {
-  await setState(ctx.user.id, null);
-  await ctx.reply("لغو شد. برای برگشت به منوی اصلی /start رو بزن.");
-});
-
-// 3) EXISTING handlers: put your current /start and "menu:home" handlers here
-//    (they were in your old bot.ts or another file; type them with Bot<MyContext>)
-
-// 4) Feature handlers
+// 3) Feature handlers
+registerStartHandlers(bot);
 registerGroupHandlers(bot);
+registerMemberHandlers(bot);
 registerTripHandlers(bot);
 registerExpenseHandlers(bot);
+registerExpenseListHandlers(bot);
 registerReportHandlers(bot);
 
-// 5) Fallback for stale buttons that no handler matched
+// 4) Fallback for stale buttons that no handler matched
 //    (must come after all callbackQuery handlers)
 bot.on("callback_query:data", async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "این دکمه منقضی شده، /start رو بزن." });
+  await ctx.answerCallbackQuery({ text: t.expired });
 });
 
-// 6) Text step router; must be registered last
+// 5) Text step router; must be registered last
 registerStepRouter(bot);
 
-// 7) A handler error must not crash the process
+// 6) A handler error must not crash the process
 bot.catch((err) => {
   console.error(`Error while handling update ${err.ctx.update.update_id}:`, err.error);
 });

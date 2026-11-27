@@ -2,55 +2,48 @@
 import { Bot, InlineKeyboard } from "grammy";
 import type { MyContext } from "@/types";
 import { prisma } from "@/db/client";
+import { fa as t } from "@/texts/fa";
+import { withNav } from "@/keyboards";
 import { getOwnedTrip } from "@/services/access";
 import { computeBalances } from "@/services/balances";
 import { settleMinimal, settleDirect } from "@/services/settle";
-import { fmt } from "@/utils/money";
+import { show } from "@/ui/show";
 
 export function registerReportHandlers(bot: Bot<MyContext>) {
   bot.callbackQuery(/^t:(\d+):report(?::(min|direct))?$/, async (ctx) => {
     const trip = await getOwnedTrip(ctx.user.id, Number(ctx.match[1]));
-    if (!trip) return ctx.answerCallbackQuery("پیدا نشد");
+    if (!trip) return ctx.answerCallbackQuery({ text: t.notFound });
 
     const expenses = await prisma.expense.findMany({
       where: { tripId: trip.id },
       include: { shares: true },
     });
-    if (expenses.length === 0) return ctx.answerCallbackQuery("هنوز خرجی ثبت نشده");
+    if (expenses.length === 0) return ctx.answerCallbackQuery({ text: t.noExpenses });
+    await ctx.answerCallbackQuery();
 
     const mode = ctx.match[2] ?? "min";
     const names = new Map(trip.group.members.map((m) => [m.id, m.displayName]));
     const net = computeBalances(expenses);
     const transfers = mode === "direct" ? settleDirect(expenses) : settleMinimal(net);
-    const total = expenses.reduce((s, e) => s + e.amount, 0);
 
-    const lines = trip.group.members.map((m) => {
-      const v = net.get(m.id) ?? 0;
-      const icon = v > 0 ? "🟢" : v < 0 ? "🔴" : "⚪";
-      return `${icon} ${m.displayName}: ${v > 0 ? "+" : ""}${fmt(v)}`;
+    const text = t.report({
+      tripName: trip.name,
+      total: expenses.reduce((s, e) => s + e.amount, 0),
+      balances: trip.group.members.map((m) => ({ name: m.displayName, value: net.get(m.id) ?? 0 })),
+      modeLabel: mode === "direct" ? t.modeDirect : t.modeMin,
+      transfers: transfers.map((x) => ({
+        from: names.get(x.from) ?? "?",
+        to: names.get(x.to) ?? "?",
+        amount: x.amount,
+      })),
     });
-    const pays = transfers.length
-      ? transfers.map((t) => `${names.get(t.from)} ← ${names.get(t.to)}: ${fmt(t.amount)}`)
-      : ["همه حساب‌ها صافه 🎉"];
 
-    const text = [
-      `📊 گزارش «${trip.name}»`,
-      `جمع کل: ${fmt(total)}`,
-      "",
-      "وضعیت هر نفر:",
-      ...lines,
-      "",
-      `پیشنهاد تسویه (${mode === "direct" ? "پرداخت مستقیم" : "کمترین تعداد تراکنش"}):`,
-      ...pays,
-    ].join("\n");
-
-    // فقط دکمه‌ی حالت «دیگه» رو نشون می‌دیم تا خطای message-is-not-modified نگیریم
+    // Only offer the *other* mode, otherwise Telegram answers "message is not modified"
     const other = mode === "direct" ? "min" : "direct";
-    const kb = new InlineKeyboard()
-      .text(other === "direct" ? "🔀 پرداخت مستقیم" : "🔀 کمترین تراکنش", `t:${trip.id}:report:${other}`).row()
-      .text("🔙 بازگشت", `t:${trip.id}`);
-
-    await ctx.editMessageText(text, { reply_markup: kb });
-    await ctx.answerCallbackQuery();
+    const kb = new InlineKeyboard().text(
+      other === "direct" ? t.btn.modeDirect : t.btn.modeMin,
+      `t:${trip.id}:report:${other}`
+    );
+    await show(ctx, text, withNav(kb, `t:${trip.id}`));
   });
 }

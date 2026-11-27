@@ -7,7 +7,3 @@ export function upsertUser(telegramId: number, name: string) {
     create: { telegramId: BigInt(telegramId), name },
   });
 }
-
-export function setStep(userId: number, step: string | null) {
-  return prisma.user.update({ where: { id: userId }, data: { step } });
-}
